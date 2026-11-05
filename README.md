@@ -1,7 +1,7 @@
 # Automatic CI/CD Deployment with Jenkins, GitHub Webhooks and Docker on AWS EC2
 
 **Project Type:** DevOps Internship Project  
-**Organization:** Uyartechnologies 
+**Organization:** Uyartechnologies  
 **Role:** Intern – DevOps Engineer
 
 ## 1. Project Overview
@@ -118,7 +118,7 @@ sudo systemctl is-active jenkins
 
 **Observed result during testing:** Java 21, Git 2.50, Docker 25.0 and the Jenkins service were all reported as installed and active.
 
-![Tool versions](images/tool-versions.png)
+![Jenkins installation and tool versions](01-jenkins-install-and-tools.png)
 
 Open `http://<JENKINS_HOST>:8080`, unlock Jenkins with the initial admin password, install the suggested plugins and create the admin user. Then install **Generic Webhook Trigger** from *Manage Jenkins > Plugins*.
 
@@ -134,6 +134,8 @@ A credential was added in *Manage Jenkins > Credentials > Global > Add Credentia
 | ID | `<CREDENTIAL_ID>` |
 
 The pipeline must use exactly this ID. A wrong ID fails the Checkout stage with *"CredentialId ... could not be found"*.
+
+![Credentials page](02-credentials-page.png)
 
 ## 7. Jenkins Pipeline
 
@@ -204,13 +206,39 @@ pipeline {
 
 A verification-only pipeline, used for a service that must not be replaced automatically, has these stages:
 
-![Verification pipeline stages](images/backend-stages.png)
+![Verification pipeline stages](05-verification-pipeline-stages.png)
 
 ## 8. GitHub Webhook and Branch Filtering
 
-### 8.1 Jenkins Job Settings
+### 8.1 GitHub Webhook
 
-In the job configuration, **Build Triggers** has **Generic Webhook Trigger** enabled:
+A webhook was added in the repository under *Settings > Webhooks > Add webhook*:
+
+| Setting | Value |
+| --- | --- |
+| Payload URL | `http://<JENKINS_HOST>:8080/github-webhook/` |
+| Content type | `application/json` |
+| Secret | set one if possible |
+| SSL verification | enabled (use HTTPS in production) |
+| Events | Just the `push` event |
+
+![GitHub webhook form](08-github-webhook-form.png)
+
+GitHub sends a **ping** when the webhook is created. *Recent Deliveries* shows **Response 200** when Jenkins is reachable:
+
+![Webhook ping delivered with response 200](09-github-webhook-ping-200.png)
+
+### 8.2 First Automatic Build
+
+With **GitHub hook trigger for GITScm polling** enabled in the job, a push to the repository started a Jenkins build with no manual action. The build cause shows **Started by GitHub push**:
+
+![Build started by a GitHub push](11-build-started-by-github-push.png)
+
+### 8.3 Branch Filtering with Generic Webhook Trigger
+
+The GitHub-plugin trigger does not filter by branch for a normal Pipeline script job. To restrict deployments to one branch, the **Generic Webhook Trigger** plugin was installed and enabled in the job's **Build Triggers**:
+
+![Generic Webhook Trigger enabled](13-generic-webhook-trigger-enabled.png)
 
 | Setting | Value |
 | --- | --- |
@@ -222,29 +250,25 @@ In the job configuration, **Build Triggers** has **Generic Webhook Trigger** ena
 
 The optional filter restricts deployments to one branch. A push to any other branch is received by Jenkins but does not start the build.
 
-![Branch filter](images/branch-filter.png)
+![Branch filter](14-branch-filter.png)
 
-### 8.2 GitHub Webhook
-
-Repository *Settings > Webhooks > Add webhook*:
+A second webhook was added in GitHub that points to the Generic Webhook Trigger endpoint:
 
 | Setting | Value |
 | --- | --- |
 | Payload URL | `http://<JENKINS_HOST>:8080/generic-webhook-trigger/invoke?token=<TOKEN>` |
 | Content type | `application/json` |
-| Secret | set one if possible |
-| SSL verification | enabled (use HTTPS in production) |
 | Events | Just the `push` event |
 
-![Webhook form](images/webhook-form.png)
+![Second webhook using the Generic Webhook Trigger endpoint](15-second-webhook-generic-endpoint.png)
 
-GitHub sends a **ping** when the webhook is created. *Recent Deliveries* shows **Response 200** when Jenkins is reachable:
+After this, pushes start builds with the cause **Generic Cause**:
 
-![Webhook delivery 200](images/webhook-delivery.png)
+![Build started by Generic Cause](16-build-started-by-generic-cause.png)
 
-### 8.3 Old Trigger
+### 8.4 Old Trigger
 
-If the job also has **GitHub hook trigger for GITScm polling** enabled and an older `/github-webhook/` hook exists, that path has no branch filter. It should be removed so that only the filtered trigger can start the job.
+If the job also has **GitHub hook trigger for GITScm polling** enabled and the original `/github-webhook/` hook still exists, that path has no branch filter. It should be removed so that only the filtered trigger can start the job.
 
 ## 9. Deployment
 
@@ -291,41 +315,36 @@ echo "Deployed successfully: HTTP $CODE"
 
 Result of a successful deployment (stage view and console):
 
-![Deployment stage view](images/frontend-stage-view.png)
+![Frontend pipeline stages](06-frontend-pipeline-stages.png)
 
-![Deployment health check](images/console-health-check.png)
+![Frontend deploy console with the health check](07-frontend-deploy-console.png)
 
 For a service that must not be replaced automatically, the pipeline only verifies it and states in the log that the running service was not touched:
 
-![Verification-only run](images/backend-console.png)
+![Verification pipeline console](04-verification-pipeline-console.png)
 
 The application and its API also responded through the reverse proxy (an empty list is returned when there is no data yet):
 
-![API check](images/api-check.png)
+![API check](api-check.png)
 
 ## 10. Testing and Verification
 
 ### Automatic Trigger Tests
 
 1. A small commit was pushed to the deployment branch.
-2. Jenkins started a build by itself. The build cause was **Generic Cause** (Generic Webhook Trigger):
-
-   ![Generic Cause trigger](images/build-generic-cause.png)
-
-3. With the GitHub plugin trigger, the build cause shows as **Started by GitHub push**:
-
-   ![Started by GitHub push](images/build-github-push.png)
-
-4. GitHub *Recent Deliveries* showed **Response 200** for each push.
-5. The Jenkins console ended with `Finished: SUCCESS` and the health check returned HTTP 200.
+2. Jenkins started a build by itself: first as **Started by GitHub push**, and after the Generic Webhook Trigger was added as **Generic Cause** (screenshots in Section 8).
+3. GitHub *Recent Deliveries* showed **Response 200** for each push.
+4. The Jenkins console ended with `Finished: SUCCESS` and the health check returned HTTP 200.
 
 ### Failure Visibility
 
-A failed build is shown in red and listed under *Last failed build*, and the following builds still run normally:
+A build that fails is reported as failed, the later stages are skipped and the running application is left unchanged:
 
-![Build history with a failed build](images/build-history.png)
+![Failed build reported as a failure](10-failed-build-reported-as-failure.png)
 
-![Permalinks](images/build-permalinks.png)
+Build history shows the failed build in red while later builds continue normally:
+
+![Build history with a failed build](12-build-history-with-failure.png)
 
 ### Functional Test Results
 
@@ -357,6 +376,8 @@ These results describe what was tested during the project. They should not be re
 **Problem:** The Checkout stage failed with *"CredentialId ... could not be found"*.
 
 **Resolution:** The pipeline was changed to use the exact credential ID saved in Jenkins.
+
+![Failed checkout caused by the credential error](03-failed-checkout-credential-error.png)
 
 ### Issue 3: Missing Dockerfile on the Branch
 
@@ -434,5 +455,4 @@ It gave me hands-on exposure to pipeline design, webhook-based triggers, branch 
 
 This repository contains sanitized technical documentation for professional portfolio and learning purposes.
 
-It excludes client-identifying information and does not contain confidential source code, credentials, access tokens, server addresses or other restricted materials. All names and addresses shown are placeholders, and screenshots have been cropped or redacted.# Jenkins-cicd-github-webhook-aws-docker
-Automated CI/CD on AWS EC2 using Jenkins, GitHub webhooks and Docker: push to GitHub, build, test, deploy and health check with branch filtering and failure reporting
+It excludes client-identifying information and does not contain confidential source code, credentials, access tokens, server addresses or other restricted materials. All names and addresses shown are placeholders, and screenshots have been cropped or redacted.
